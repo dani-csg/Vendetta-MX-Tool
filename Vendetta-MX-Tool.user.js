@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.5.2
+// @version      1.6.0
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
@@ -32,6 +32,8 @@
     mission:   'vp_mission_default_v1',
     resources: 'vp_resources_default_v1',
     boxes:     'vp_collapsed_boxes_v2',
+    troops:    'vp_troops_defaults_v1',           // { unitKey: number }
+    postSendDelta: 'vp_post_send_building_delta_v1'// "-1" | "+1" in sessionStorage
   };
 
   const SELECTORS = {
@@ -54,76 +56,27 @@
     btnSend:    '#enviar',
   };
 
-  /* ================== CSS ================== */
+  /* ================== CSS (kompakte Buttons etc.) ================== */
   (function ensureCss(){
     if (document.querySelector('#vp-style')) return;
     const st=document.createElement('style'); st.id='vp-style';
     st.textContent=`
-      /* --- Building navigation buttons + select (kompakter, weniger rund) --- */
-      #frmBuilding button {
-        border-radius: 4px;
-        padding: 2px 8px;
-        font-size: 12px;
-        line-height: 1.2;
-        height: auto;
-        vertical-align: middle;
-        background:#f7f7f7;
-        border:1px solid #999;
-        cursor:pointer;
+      #frmBuilding button, .vp-inline-group button, .vp-amount button, input.vp-like {
+        border-radius: 4px; padding: 2px 8px; font-size: 12px; line-height: 1.2;
+        height: auto; vertical-align: middle; background:#f7f7f7; border:1px solid #999; cursor:pointer;
       }
-      #frmBuilding select {
-        border-radius: 4px;
-        padding: 2px 4px;
-        font-size: 12px;
-        line-height: 1.2;
-        height: auto;
-        vertical-align: middle;
-      }
+      #frmBuilding select { border-radius: 4px; padding: 2px 4px; font-size: 12px; line-height: 1.2; height: auto; vertical-align: middle; }
 
-      /* --- Inline Save / Clear Buttons neben Inputs --- */
       .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
-      .vp-inline-group button{
-        border-radius: 4px;
-        padding: 2px 8px;
-        font-size: 12px;
-        line-height: 1.2;
-        height: auto;
-        vertical-align: middle;
-        background:#f7f7f7;
-        border:1px solid #999;
-        cursor:pointer;
-      }
-
-      /* --- Quick amount button groups um die Ressourcenfelder --- */
       .vp-res-wrap{ display:flex; align-items:center; gap:.35rem; }
       .vp-amount{ display:inline-flex; gap:.25rem; }
-      .vp-amount button{
-        border-radius: 4px;
-        padding: 2px 8px;
-        font-size: 12px;
-        line-height: 1.2;
-        height: auto;
-        vertical-align: middle;
-        background:#f7f7f7;
-        border:1px solid #aaa;
-        cursor:pointer;
-      }
 
-      /* --- Collapsible toggles (Overview) --- */
       .content_box{ border:1px solid #ccc; border-radius:.35rem; padding:.25rem .5rem; margin-bottom:.6rem; position:relative; z-index:1; }
       .content_box > h2{ position:relative; padding-right:2.2rem; cursor:default; }
-
-      .vp-box-toggle{
-        position:absolute; right:.4rem; top:50%; transform:translateY(-50%);
-        background:inherit; color:#f2f2f2; border:1px solid #f2f2f2;
-        border-radius:.25rem; font:12px/1.2 system-ui,sans-serif;
-        width:1.6rem; height:1.3rem; line-height:1.1rem; text-align:center;
-        cursor:pointer; opacity:.9;
-      }
+      .vp-box-toggle{ position:absolute; right:.4rem; top:50%; transform:translateY(-50%); background:inherit; color:#f2f2f2; border:1px solid #f2f2f2; border-radius:.25rem; font:12px/1.2 system-ui,sans-serif; width:1.6rem; height:1.3rem; line-height:1.1rem; text-align:center; cursor:pointer; opacity:.9; }
       .vp-box-toggle:hover{ opacity:1; filter:brightness(1.2); }
       .content_box.vp-collapsed .content_box_text{ display:none !important; }
 
-      /* --- Ressourcenbalken: weniger Abstand, kein Überdecken --- */
       body.vp-overview #barraRecursos{ position:static !important; z-index:auto !important; margin:.25rem 0 .35rem 0 !important; }
       body.vp-overview #barraRecursos + br{ display:none !important; }
       body.vp-overview #content .content_box:first-of-type{ margin-top:.25rem; }
@@ -132,7 +85,7 @@
     document.head.appendChild(st);
   })();
 
-  /* ================== A) Building Navigator (− [select] +) ================== */
+  /* ================== Building Navigator (− [select] +) ================== */
   function mountBuildingNavigator(){
     const sel = $(SELECTORS.buildingSelect);
     if (!sel || sel.dataset.vpHasNav) return;
@@ -140,8 +93,8 @@
     const minus = navBtn('−','Previous building',()=>navigateBuilding(-1));
     const plus  = navBtn('+','Next building',   ()=>navigateBuilding(+1));
 
-    sel.insertAdjacentElement('beforebegin', minus); // − links
-    sel.insertAdjacentElement('afterend', plus);     // + rechts
+    sel.insertAdjacentElement('beforebegin', minus);
+    sel.insertAdjacentElement('afterend', plus);
 
     sel.dataset.vpHasNav='1';
   }
@@ -152,15 +105,15 @@
   }
   function navigateBuilding(delta){
     const sel=$(SELECTORS.buildingSelect);
-    if(!sel || !sel.options || sel.options.length<2) return;
+    const form=$(SELECTORS.buildingForm);
+    if(!sel || !form || !sel.options || sel.options.length<2) return;
     const len=sel.options.length, cur=sel.selectedIndex>=0?sel.selectedIndex:0;
     sel.selectedIndex=(cur+delta+len)%len;
     try{ sel.dispatchEvent(new Event('change',{bubbles:true})); }catch{}
-    const form=$(SELECTORS.buildingForm);
-    if(form){ try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} } }
+    try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
   }
 
-  /* ================== B) Overview Toggles (persist) ================== */
+  /* ================== Overview Toggles (persist) ================== */
   function isOverviewPage(){
     const p=location.pathname.replace(/\/+$/,'');
     return /\/public\/mob\/visiongeneral(?:\/index)?$/i.test(p);
@@ -169,11 +122,10 @@
     if (!isOverviewPage()) return;
     document.body.classList.add('vp-overview');
 
-    const state = Object.assign({}, GM_Get(STORAGE_KEYS.boxes, {})); // title -> collapsed:boolean
+    const state = Object.assign({}, GM_Get(STORAGE_KEYS.boxes, {}));
     $$('#content .content_box').forEach(box=>{
       if (box.dataset.vpTgl) return;
       const h2=box.querySelector('h2'), body=box.querySelector('.content_box_text'); if(!h2||!body) return;
-
       const title=(h2.textContent||'').trim();
 
       const btn=document.createElement('button');
@@ -190,7 +142,7 @@
         btn.setAttribute('aria-expanded', newExpanded ? 'true' : 'false');
         btn.textContent = newExpanded ? '−' : '+';
         box.classList.toggle('vp-collapsed', !newExpanded);
-        state[title] = !newExpanded; // collapsed speichern
+        state[title] = !newExpanded;
         GM_Set(STORAGE_KEYS.boxes, state);
       });
 
@@ -199,7 +151,7 @@
     });
   }
 
-  /* ================== C) Missions: Save/Clear + Quick Amounts ================== */
+  /* ================== Missions: Ressourcen-Helper (bestehend) ================== */
   function onMissionsPage(){ return !!$(SELECTORS.missionForm); }
 
   function inlineGroup(saveCb, clearCb){
@@ -210,50 +162,18 @@
     return span;
   }
 
-  function mountMissionHelpers(){
-    if (!onMissionsPage()) return;
-
-    // Koordinaten
-    const cx=$(SELECTORS.coordX), cy=$(SELECTORS.coordY), cz=$(SELECTORS.coordZ);
-    if (cx && !cz.dataset.vpDone){
-      cz.insertAdjacentElement('afterend', inlineGroup(
-        ()=>GM_Set(STORAGE_KEYS.coords,{x:cx.value,y:cy.value,z:cz.value}),
-        ()=>{ GM_Del(STORAGE_KEYS.coords); setVal(cx,''); setVal(cy,''); setVal(cz,''); }
-      ));
-      const saved=GM_Get(STORAGE_KEYS.coords,null);
-      if(saved){ setVal(cx,saved.x); setVal(cy,saved.y); setVal(cz,saved.z); }
-      cz.dataset.vpDone='1';
-    }
-
-    // Missionsart
-    const ms=$(SELECTORS.missionSelect);
-    if (ms && !ms.dataset.vpDone){
-      ms.insertAdjacentElement('afterend', inlineGroup(
-        ()=>GM_Set(STORAGE_KEYS.mission,{value:ms.value}),
-        ()=>GM_Del(STORAGE_KEYS.mission)
-      ));
-      const sv=GM_Get(STORAGE_KEYS.mission,null);
-      if(sv){ ms.value=sv.value; ms.dispatchEvent(new Event('change',{bubbles:true})); }
-      ms.addEventListener('change', applySavedResourcesIfTransport);
-      ms.dataset.vpDone='1';
-    }
-
-    // Ressourcen: Save/Clear am Header + Quickbuttons pro Feld
-    mountResourcesHeaderAndQuickButtons();
-  }
-
   function mountResourcesHeaderAndQuickButtons(){
     const inputs = [
-      $(SELECTORS.resArm),
-      $(SELECTORS.resMun),
-      $(SELECTORS.resAlc),
-      $(SELECTORS.resDol),
+      $(SELECTORS.resArm), $(SELECTORS.resMun),
+      $(SELECTORS.resAlc), $(SELECTORS.resDol),
     ].filter(Boolean);
-
     if (!inputs.length) return;
 
-    // Save/Clear im Header der Ressourcen-Tabelle (einmal)
-    const headerCell = findResourcesHeaderCell();
+    const headerCell = (()=>{
+      const cells = $$('.c, td.c, th.c, h2');
+      return cells.find(el => /resources/i.test((el.textContent||'').trim()));
+    })();
+
     if (headerCell && !headerCell.dataset.vpResHeader){
       headerCell.insertAdjacentElement('beforeend', inlineGroup(
         ()=>GM_Set(STORAGE_KEYS.resources, readResources()),
@@ -262,7 +182,6 @@
       headerCell.dataset.vpResHeader='1';
     }
 
-    // Quickbuttons je Feld: links -50k/-5k/-500, rechts +1k/+10k/+100k
     const leftDeltas  = [-50000, -5000, -500];
     const rightDeltas = [  1000,  10000, 100000];
 
@@ -275,12 +194,11 @@
         inp.parentNode.insertBefore(wrap, inp);
         wrap.append(inp);
       }
-      // links
       const left = document.createElement('span');
       left.className='vp-amount';
       leftDeltas.forEach(d=>left.appendChild(amtBtn(label(d), d, inp)));
       wrap.insertBefore(left, inp);
-      // rechts
+
       const right = document.createElement('span');
       right.className='vp-amount';
       rightDeltas.forEach(d=>right.appendChild(amtBtn(label(d), d, inp)));
@@ -289,14 +207,7 @@
       inp.dataset.vpQuick='1';
     });
 
-    // gespeicherte Ressourcen ggf. anwenden (nur sinnvoll bei Transport)
     applySavedResourcesIfTransport();
-  }
-
-  function findResourcesHeaderCell(){
-    // Je nach HTML kann das ein TH/TD mit "Resources" Text sein
-    const cells = $$('td.c, th.c, h2');
-    return cells.find(el => (el.textContent||'').trim().toLowerCase().startsWith('resources'));
   }
   function readResources(){
     return {
@@ -319,7 +230,6 @@
     const saved=GM_Get(STORAGE_KEYS.resources,null);
     if (saved) applyResources(saved);
   }
-
   function amtBtn(text, delta, input){
     const b=document.createElement('button');
     b.type='button'; b.textContent=text;
@@ -333,30 +243,134 @@
   }
   function label(n){
     const sign = n<0?'-':'+'; const abs=Math.abs(n);
-    if (abs>=1e6) return sign + (abs/1000/1000)+'M';
-    if (abs>=1e3) return sign + (abs/1000)+'k';
+    if (abs>=1e6) return sign + (abs/1e6)+'M';
+    if (abs>=1e3) return sign + (abs/1e3)+'k';
     return sign + abs;
+  }
+
+  /* ================== NEU: Troops Save/Clear (auto für alle Einheiten) ================== */
+  function mountTroopSaveClear(){
+    const inputs = $$('input[id^="subFormTropas-"]');
+    if (!inputs.length) return;
+
+    const state = Object.assign({}, GM_Get(STORAGE_KEYS.troops, {})); // { unitKey: value }
+
+    inputs.forEach(inp=>{
+      if (inp.dataset.vpTroopDone) return;
+      const row = inp.closest('tr');
+      const labelEl = row ? row.querySelector('label') : null;
+      const rawName = (labelEl?.textContent || '').trim();   // z.B. "Mover (1)"
+      const unitKey = normalizeUnitName(rawName);            // -> "mover"
+
+      const controls = inlineGroup(
+        ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE_KEYS.troops, state); },
+        ()=>{ delete state[unitKey]; GM_Set(STORAGE_KEYS.troops, state); setVal(inp,''); }
+      );
+      inp.insertAdjacentElement('afterend', controls);
+
+      if (state[unitKey] != null) setVal(inp, state[unitKey]);
+
+      inp.dataset.vpTroopDone='1';
+    });
+  }
+  function normalizeUnitName(s){
+    return String(s||'')
+      .replace(/\(.*?\)/g,'')           // "(1)" entfernen
+      .replace(/[^\p{L}\p{N}]+/gu,'_')  // alles Nicht-Buchstabe/Zahl -> "_"
+      .replace(/^_+|_+$/g,'')           // Trim "_"
+      .toLowerCase();
+  }
+
+  /* ================== NEU: Dual-Send Buttons (< Send / Send >) ================== */
+  function mountDualSendButtons(){
+    const btnSend   = $(SELECTORS.btnSend);
+    const btnUpdate = $(SELECTORS.btnUpdate);
+    const form      = $(SELECTORS.missionForm);
+    if (!form || !btnSend || btnSend.dataset.vpDual) return;
+
+    // "< Send" links neben "Update"
+    if (btnUpdate && !btnUpdate.dataset.vpDualLeft){
+      const leftBtn = document.createElement('input');
+      leftBtn.type='button';
+      leftBtn.value='< Send';
+      leftBtn.className = (btnSend.className || '') + ' vp-like';
+      leftBtn.addEventListener('click', ()=>{
+        setPostSendDelta(-1);
+        safeSubmitSend();
+      });
+      btnUpdate.parentNode.insertBefore(leftBtn, btnUpdate);
+      btnUpdate.dataset.vpDualLeft='1';
+    }
+
+    // "Send >" rechts neben "Send"
+    const rightBtn = document.createElement('input');
+    rightBtn.type='button';
+    rightBtn.value='Send >';
+    rightBtn.className = (btnSend.className || '') + ' vp-like';
+    rightBtn.addEventListener('click', ()=>{
+        setPostSendDelta(+1);
+        safeSubmitSend();
+    });
+    if (btnSend.nextSibling) btnSend.parentNode.insertBefore(rightBtn, btnSend.nextSibling); else btnSend.parentNode.appendChild(rightBtn);
+
+    btnSend.dataset.vpDual='1';
+  }
+
+  function safeSubmitSend(){
+    // Klickt bevorzugt den echten "Send"-Button, fallback submit()
+    const form=$(SELECTORS.missionForm);
+    const btn=$(SELECTORS.btnSend);
+    if (!form || !btn) return;
+    try { btn.click(); }
+    catch {
+      try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
+    }
+  }
+
+  function setPostSendDelta(delta){
+    try { sessionStorage.setItem(STORAGE_KEYS.postSendDelta, String(delta)); } catch{}
+  }
+  function consumePostSendDelta(){
+    let d=null;
+    try { d = sessionStorage.getItem(STORAGE_KEYS.postSendDelta); sessionStorage.removeItem(STORAGE_KEYS.postSendDelta); } catch{}
+    const n = d==null ? null : parseInt(d,10);
+    return Number.isFinite(n) ? n : null;
+  }
+  function applyPostSendNavigationIfAny(){
+    const delta = consumePostSendDelta();
+    if (delta==null) return;
+    // Nach dem Postback sicher zum gewünschten Gebäude
+    navigateBuilding(delta);
   }
 
   /* ================== Init & Observer ================== */
   function bootstrap(){
     mountBuildingNavigator();
     mountOverviewToggles();
-    mountMissionHelpers();
+
+    if (!onMissionsPage()) return;
+
+    // vorhandene Helfer:
+    mountResourcesHeaderAndQuickButtons();
+
+    // neu:
+    mountTroopSaveClear();
+    mountDualSendButtons();
+
+    // falls von < Send / Send > zurück:
+    applyPostSendNavigationIfAny();
   }
 
   // run now
   bootstrap();
 
-  // observe ajaxy changes
+  // observe ajax-y changes
   let raf=null;
   const obs=new MutationObserver(()=>{
     if(raf) return;
     raf=requestAnimationFrame(()=>{
       raf=null;
-      mountBuildingNavigator();
-      mountOverviewToggles();
-      mountMissionHelpers();
+      bootstrap();
     });
   });
   obs.observe(document.documentElement,{childList:true,subtree:true});
