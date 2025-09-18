@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.6.3
+// @version      1.6.5
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
@@ -17,6 +17,7 @@
 (function () {
   'use strict';
 
+  /* ---------- helpers ---------- */
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const toInt=(v,d=0)=>{const n=parseInt(String(v??'').replace(/[^\d-]+/g,''),10);return Number.isFinite(n)?n:d;};
@@ -30,13 +31,15 @@
     troops:    'vp_troops_defaults_v1',
     coords:    'vp_coords_default_v1',
     mission:   'vp_mission_default_v1',
+    resources: 'vp_resources_default_v1',
     postDelta: 'vp_post_send_building_delta_v1',
   };
 
   const SEL = {
-    // global
+    // global / overview
     buildingForm:  '#frmBuilding',
     buildingSelect:'#building',
+
     // missions
     missionForm:   'form[action="/public/mob/misiones"]',
     missionSelect: '#subFormCoordenadas-mision',
@@ -51,38 +54,41 @@
     btnSend:       '#enviar',
   };
 
-  /* ========= minimal, strikt-namespaced Styles ========= */
-  (function ensureCss(){
-    if (document.querySelector('#vp-style')) return;
+  const onMissionsPage = () => !!$(SEL.missionForm);
+
+  /* ---------- CSS (strikt nur für Missionsseite + unsere kleinen Zusatzbuttons) ---------- */
+  (function css(){
+    if ($('#vp-style')) return;
     const st=document.createElement('style'); st.id='vp-style';
     st.textContent = `
-      /* Nur unsere Zusatzbuttons stylen */
-      .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
-      .vp-inline-group button{ border-radius:4px; padding:2px 8px; font-size:12px; background:#f7f7f7; border:1px solid #999; cursor:pointer; height:auto; line-height:1.2; }
+      /* nur unsere Controls auf der Missionsseite */
+      body.vp-missions .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
+      body.vp-missions .vp-inline-group button{
+        border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
+        background:#f7f7f7; border:1px solid #999; cursor:pointer;
+      }
+      body.vp-missions .vp-res-wrap{ display:flex; align-items:center; gap:.35rem; }
+      body.vp-missions .vp-amount{ display:inline-flex; gap:.25rem; }
+      body.vp-missions .vp-amount button{
+        border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
+        background:#f7f7f7; border:1px solid #aaa; cursor:pointer;
+      }
+      /* zusätzliche Send-Buttons mit Abstand */
+      body.vp-missions input.vp-like{
+        border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
+        background:#f7f7f7; border:1px solid #999; cursor:pointer;
+      }
+      body.vp-missions input.vp-left  { margin-right:.5rem; }
+      body.vp-missions input.vp-right { margin-left:.5rem; }
 
-      /* Zusätzliche Send-Buttons mit Abstand */
-      input.vp-like{ border-radius:4px; padding:2px 8px; font-size:12px; background:#f7f7f7; border:1px solid #999; cursor:pointer; height:auto; line-height:1.2; }
-      input.vp-left { margin-right:.5rem; }
-      input.vp-right{ margin-left:.5rem; }
-
-      /* Nur unsere kleinen Nav-Buttons neben dem Gebäude-Select */
-      button.vp-nav { border-radius:4px; padding:2px 8px; font-size:12px; background:#f7f7f7; border:1px solid #999; cursor:pointer; height:auto; line-height:1.2; margin:0 .25rem; }
+      /* unsere kleinen Navigator-Buttons neben dem Gebäude-Select – global, aber neutral */
+      button.vp-nav { border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
+        background:#f7f7f7; border:1px solid #999; cursor:pointer; margin:0 .25rem; }
     `;
     document.head.appendChild(st);
   })();
 
-  /* ========= Utility ========= */
-  const onMissionsPage = () => !!$(SEL.missionForm);
-
-  function inlineGroup(saveCb, clearCb){
-    const wrap=document.createElement('span'); wrap.className='vp-inline-group';
-    const s=document.createElement('button'); s.type='button'; s.textContent='Save';  s.addEventListener('click',saveCb);
-    const c=document.createElement('button'); c.type='button'; c.textContent='Clear'; c.addEventListener('click',clearCb);
-    wrap.append(s,c);
-    return wrap;
-  }
-
-  /* ========= A) Building quick-nav (Overview & überall wo vorhanden) ========= */
+  /* ---------- Overview/Hauptseite: Building quick-nav ---------- */
   function mountBuildingNavigator(){
     const sel=$(SEL.buildingSelect);
     if (!sel || sel.dataset.vpHasNav) return;
@@ -103,37 +109,43 @@
     try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
   }
 
-  /* ========= B) Missions helpers ========= */
+  /* ---------- Missionsseite: Save/Clear & Ressourcen-Quicks ---------- */
+  function inlineGroup(saveCb, clearCb){
+    const wrap=document.createElement('span'); wrap.className='vp-inline-group';
+    const s=document.createElement('button'); s.type='button'; s.textContent='Save';  s.addEventListener('click',saveCb);
+    const c=document.createElement('button'); c.type='button'; c.textContent='Clear'; c.addEventListener('click',clearCb);
+    wrap.append(s,c); return wrap;
+  }
+
+  // Troops (auto für alle Einheiten)
   function mountTroopSaveClear(){
     const inputs = $$('input[id^="subFormTropas-"]');
     if (!inputs.length) return;
-    const state = Object.assign({}, GM_Get(STORAGE.troops, {}));
+    const state = Object.assign({}, GM_Get(STORAGE.troops, {})); // { unitKey: value }
     inputs.forEach(inp=>{
       if (inp.dataset.vpTroopDone) return;
       const row = inp.closest('tr');
       const labelEl = row ? row.querySelector('label') : null;
-      const rawName = (labelEl?.textContent || '').trim();   // e.g. "Mover (1)"
+      const rawName = (labelEl?.textContent || '').trim();   // z.B. "Mover (1)"
       const unitKey = normalizeUnitName(rawName);            // -> "mover"
-
       const controls = inlineGroup(
         ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE.troops, state); },
         ()=>{ delete state[unitKey]; GM_Set(STORAGE.troops, state); setVal(inp,''); }
       );
       inp.insertAdjacentElement('afterend', controls);
-
       if (state[unitKey] != null) setVal(inp, state[unitKey]);
-
       inp.dataset.vpTroopDone='1';
     });
   }
   function normalizeUnitName(s){
     return String(s||'')
-      .replace(/\(.*?\)/g,'')
-      .replace(/[^\p{L}\p{N}]+/gu,'_')
-      .replace(/^_+|_+$/g,'')
+      .replace(/\(.*?\)/g,'')           // "(1)" entfernen
+      .replace(/[^\p{L}\p{N}]+/gu,'_')  // nicht alnum -> "_"
+      .replace(/^_+|_+$/g,'')           // Trim "_"
       .toLowerCase();
   }
 
+  // Koordinaten Save/Clear
   function mountCoordsSaveClear(){
     const cx=$(SEL.coordX), cy=$(SEL.coordY), cz=$(SEL.coordZ);
     if (!cz || cz.dataset.vpDone) return;
@@ -146,6 +158,7 @@
     cz.dataset.vpDone='1';
   }
 
+  // Missionsart Save/Clear
   function mountMissionSaveClear(){
     const ms=$(SEL.missionSelect);
     if (!ms || ms.dataset.vpDone) return;
@@ -155,10 +168,94 @@
     ));
     const sv=GM_Get(STORAGE.mission,null);
     if(sv){ ms.value=sv.value; ms.dispatchEvent(new Event('change',{bubbles:true})); }
+    ms.addEventListener('change', applySavedResourcesIfTransport);
     ms.dataset.vpDone='1';
   }
 
-  /* ========= C) < Send / Send > ========= */
+  // Ressourcen: Header Save/Clear + Quick Buttons je Feld
+  function mountResourcesHeaderAndQuickButtons(){
+    const inputs = [$(SEL.resArm),$(SEL.resMun),$(SEL.resAlc),$(SEL.resDol)].filter(Boolean);
+    if (!inputs.length) return;
+
+    // Headerzelle finden ("Resources")
+    const headerCell = (()=>{
+      const cells = $$('.c, td.c, th.c, h2');
+      return cells.find(el => /resources/i.test((el.textContent||'').trim()));
+    })();
+
+    if (headerCell && !headerCell.dataset.vpResHeader){
+      headerCell.insertAdjacentElement('beforeend', inlineGroup(
+        ()=>GM_Set(STORAGE.resources, readResources()),
+        ()=>{ GM_Del(STORAGE.resources); applyResources({arm:'',mun:'',alc:'',dol:''}); }
+      ));
+      headerCell.dataset.vpResHeader='1';
+    }
+
+    const leftD = [-50000, -5000, -500];
+    const rightD= [  1000,  10000, 100000];
+
+    inputs.forEach(inp=>{
+      if (inp.dataset.vpQuick) return;
+      let wrap = inp.closest('.vp-res-wrap');
+      if (!wrap){
+        wrap=document.createElement('span');
+        wrap.className='vp-res-wrap';
+        inp.parentNode.insertBefore(wrap, inp);
+        wrap.append(inp);
+      }
+      const left = document.createElement('span'); left.className='vp-amount';
+      leftD.forEach(d=>left.appendChild(amtBtn(label(d), d, inp)));
+      wrap.insertBefore(left, inp);
+
+      const right = document.createElement('span'); right.className='vp-amount';
+      rightD.forEach(d=>right.appendChild(amtBtn(label(d), d, inp)));
+      if (inp.nextSibling) wrap.insertBefore(right, inp.nextSibling); else wrap.appendChild(right);
+
+      inp.dataset.vpQuick='1';
+    });
+
+    applySavedResourcesIfTransport();
+  }
+  function readResources(){
+    return {
+      arm: toInt($(SEL.resArm)?.value,0),
+      mun: toInt($(SEL.resMun)?.value,0),
+      alc: toInt($(SEL.resAlc)?.value,0),
+      dol: toInt($(SEL.resDol)?.value,0),
+    };
+  }
+  function applyResources(o){
+    setVal($(SEL.resArm), o?.arm ?? '');
+    setVal($(SEL.resMun), o?.mun ?? '');
+    setVal($(SEL.resAlc), o?.alc ?? '');
+    setVal($(SEL.resDol), o?.dol ?? '');
+  }
+  function applySavedResourcesIfTransport(){
+    const ms=$(SEL.missionSelect);
+    const isTransport = ms && String(ms.value)==='3';
+    if (!isTransport) return;
+    const saved=GM_Get(STORAGE.resources,null);
+    if (saved) applyResources(saved);
+  }
+  function amtBtn(text, delta, input){
+    const b=document.createElement('button');
+    b.type='button'; b.textContent=text;
+    b.addEventListener('click', ()=>{
+      let cur=toInt(input.value,0);
+      cur += delta;
+      if (cur < 0) cur = 0;
+      setVal(input, cur);
+    });
+    return b;
+  }
+  function label(n){
+    const sign = n<0?'-':'+'; const abs=Math.abs(n);
+    if (abs>=1e6) return sign + (abs/1e6)+'M';
+    if (abs>=1e3) return sign + (abs/1e3)+'k';
+    return sign + abs;
+  }
+
+  /* ---------- < Send / Send > ---------- */
   function mountExtendedSend(){
     const btnSend=$(SEL.btnSend), btnUpdate=$(SEL.btnUpdate);
     if(!btnSend || btnSend.dataset.vpExt) return;
@@ -175,6 +272,7 @@
     btnSend.insertAdjacentElement('afterend',btnNext);
     btnSend.dataset.vpExt='1';
   }
+
   function safeSubmitSend(){
     const form=$(SEL.btnSend)?.closest('form');
     if(!form) return;
@@ -185,19 +283,25 @@
   function consumePostSendDelta(){ let d=null; try{ d=sessionStorage.getItem(STORAGE.postDelta); sessionStorage.removeItem(STORAGE.postDelta); }catch{}; const n=parseInt(d,10); return Number.isFinite(n)?n:null; }
   function applyPostSendNavigationIfAny(){ const delta=consumePostSendDelta(); if(delta!=null) navigateBuilding(delta); }
 
-  /* ========= Init & Observer ========= */
+  /* ---------- Init & Observer ---------- */
   function bootstrap(){
-    // immer: Navigator und ggf. Post-Send-Navigation
+    // Overview: nur Navigator (beeinflusst die Box-Toggles NICHT)
     mountBuildingNavigator();
-    applyPostSendNavigationIfAny();
 
-    // nur auf Missionsseite: Helfer
-    if (onMissionsPage()){
+    // Missionsseite aktivieren/deaktivieren
+    if (onMissionsPage()) {
+      document.body.classList.add('vp-missions');
       mountCoordsSaveClear();
       mountMissionSaveClear();
+      mountResourcesHeaderAndQuickButtons();
       mountTroopSaveClear();
       mountExtendedSend();
+    } else {
+      document.body.classList.remove('vp-missions');
     }
+
+    // falls wir von <Send/Send> kommen: egal welche Seite, jetzt springen
+    applyPostSendNavigationIfAny();
   }
 
   bootstrap();
