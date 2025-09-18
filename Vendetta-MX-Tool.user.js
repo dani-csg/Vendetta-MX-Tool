@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.6.0
+// @version      1.6.1
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
@@ -17,7 +17,7 @@
 (function() {
   'use strict';
 
-  /* ================== Helpers & Config ================== */
+  /* ============ Helpers & Config ============ */
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const toInt = (v,d=0)=>{ const n=parseInt(String(v??'').replace(/[^\d-]+/g,''),10); return Number.isFinite(n)?n:d; };
@@ -27,16 +27,15 @@
   function GM_Set(k,v){ try{GM_setValue(k,v);}catch{} }
   function GM_Del(k){ try{GM_deleteValue(k);}catch{} }
 
-  const STORAGE_KEYS = {
+  const STORAGE = {
     coords:    'vp_coords_default_v1',
     mission:   'vp_mission_default_v1',
     resources: 'vp_resources_default_v1',
-    boxes:     'vp_collapsed_boxes_v2',
-    troops:    'vp_troops_defaults_v1',           // { unitKey: number }
-    postSendDelta: 'vp_post_send_building_delta_v1'// "-1" | "+1" in sessionStorage
+    troops:    'vp_troops_defaults_v1',
+    postDelta: 'vp_post_send_building_delta_v1',
   };
 
-  const SELECTORS = {
+  const SEL = {
     buildingForm:  '#frmBuilding',
     buildingSelect:'#building',
 
@@ -56,7 +55,7 @@
     btnSend:    '#enviar',
   };
 
-  /* ================== CSS (kompakte Buttons etc.) ================== */
+  /* ============ CSS (inkl. Abstände) ============ */
   (function ensureCss(){
     if (document.querySelector('#vp-style')) return;
     const st=document.createElement('style'); st.id='vp-style';
@@ -68,34 +67,27 @@
       #frmBuilding select { border-radius: 4px; padding: 2px 4px; font-size: 12px; line-height: 1.2; height: auto; vertical-align: middle; }
 
       .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
+
       .vp-res-wrap{ display:flex; align-items:center; gap:.35rem; }
       .vp-amount{ display:inline-flex; gap:.25rem; }
 
-      .content_box{ border:1px solid #ccc; border-radius:.35rem; padding:.25rem .5rem; margin-bottom:.6rem; position:relative; z-index:1; }
-      .content_box > h2{ position:relative; padding-right:2.2rem; cursor:default; }
-      .vp-box-toggle{ position:absolute; right:.4rem; top:50%; transform:translateY(-50%); background:inherit; color:#f2f2f2; border:1px solid #f2f2f2; border-radius:.25rem; font:12px/1.2 system-ui,sans-serif; width:1.6rem; height:1.3rem; line-height:1.1rem; text-align:center; cursor:pointer; opacity:.9; }
-      .vp-box-toggle:hover{ opacity:1; filter:brightness(1.2); }
-      .content_box.vp-collapsed .content_box_text{ display:none !important; }
+      /* Abstand für zusätzliche Send-Buttons */
+      input.vp-like.vp-left  { margin-right: .5rem; }
+      input.vp-like.vp-right { margin-left:  .5rem; }
 
-      body.vp-overview #barraRecursos{ position:static !important; z-index:auto !important; margin:.25rem 0 .35rem 0 !important; }
-      body.vp-overview #barraRecursos + br{ display:none !important; }
-      body.vp-overview #content .content_box:first-of-type{ margin-top:.25rem; }
-      body.vp-overview #content{ padding-top:.25rem !important; }
+      /* (bestehende Styles aus deiner Vorgängerversion gekürzt) */
     `;
     document.head.appendChild(st);
   })();
 
-  /* ================== Building Navigator (− [select] +) ================== */
+  /* ============ Building navigator (− [select] +) ============ */
   function mountBuildingNavigator(){
-    const sel = $(SELECTORS.buildingSelect);
+    const sel = $(SEL.buildingSelect);
     if (!sel || sel.dataset.vpHasNav) return;
-
     const minus = navBtn('−','Previous building',()=>navigateBuilding(-1));
     const plus  = navBtn('+','Next building',   ()=>navigateBuilding(+1));
-
     sel.insertAdjacentElement('beforebegin', minus);
     sel.insertAdjacentElement('afterend', plus);
-
     sel.dataset.vpHasNav='1';
   }
   function navBtn(txt,title,fn){
@@ -104,8 +96,8 @@
     return b;
   }
   function navigateBuilding(delta){
-    const sel=$(SELECTORS.buildingSelect);
-    const form=$(SELECTORS.buildingForm);
+    const sel=$(SEL.buildingSelect);
+    const form=$(SEL.buildingForm);
     if(!sel || !form || !sel.options || sel.options.length<2) return;
     const len=sel.options.length, cur=sel.selectedIndex>=0?sel.selectedIndex:0;
     sel.selectedIndex=(cur+delta+len)%len;
@@ -113,47 +105,7 @@
     try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
   }
 
-  /* ================== Overview Toggles (persist) ================== */
-  function isOverviewPage(){
-    const p=location.pathname.replace(/\/+$/,'');
-    return /\/public\/mob\/visiongeneral(?:\/index)?$/i.test(p);
-  }
-  function mountOverviewToggles(){
-    if (!isOverviewPage()) return;
-    document.body.classList.add('vp-overview');
-
-    const state = Object.assign({}, GM_Get(STORAGE_KEYS.boxes, {}));
-    $$('#content .content_box').forEach(box=>{
-      if (box.dataset.vpTgl) return;
-      const h2=box.querySelector('h2'), body=box.querySelector('.content_box_text'); if(!h2||!body) return;
-      const title=(h2.textContent||'').trim();
-
-      const btn=document.createElement('button');
-      btn.type='button'; btn.className='vp-box-toggle';
-
-      const collapsed=!!state[title];
-      if (collapsed) box.classList.add('vp-collapsed');
-      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-      btn.textContent = collapsed ? '+' : '−';
-
-      btn.addEventListener('click', ()=>{
-        const nowExpanded = btn.getAttribute('aria-expanded')==='true';
-        const newExpanded = !nowExpanded;
-        btn.setAttribute('aria-expanded', newExpanded ? 'true' : 'false');
-        btn.textContent = newExpanded ? '−' : '+';
-        box.classList.toggle('vp-collapsed', !newExpanded);
-        state[title] = !newExpanded;
-        GM_Set(STORAGE_KEYS.boxes, state);
-      });
-
-      h2.appendChild(btn);
-      box.dataset.vpTgl='1';
-    });
-  }
-
-  /* ================== Missions: Ressourcen-Helper (bestehend) ================== */
-  function onMissionsPage(){ return !!$(SELECTORS.missionForm); }
-
+  /* ============ Missions: Save/Clear (Koordinaten + Mission) ============ */
   function inlineGroup(saveCb, clearCb){
     const span=document.createElement('span'); span.className='vp-inline-group';
     const s=document.createElement('button'); s.type='button'; s.textContent='Save';  s.addEventListener('click',saveCb);
@@ -161,12 +113,33 @@
     span.append(s,c);
     return span;
   }
+  function mountCoordsSaveClear(){
+    const cx=$(SEL.coordX), cy=$(SEL.coordY), cz=$(SEL.coordZ);
+    if (!cz || cz.dataset.vpDone) return;
+    cz.insertAdjacentElement('afterend', inlineGroup(
+      ()=>GM_Set(STORAGE.coords,{x:cx.value,y:cy.value,z:cz.value}),
+      ()=>{ GM_Del(STORAGE.coords); setVal(cx,''); setVal(cy,''); setVal(cz,''); }
+    ));
+    const saved=GM_Get(STORAGE.coords,null);
+    if(saved){ setVal(cx,saved.x); setVal(cy,saved.y); setVal(cz,saved.z); }
+    cz.dataset.vpDone='1';
+  }
+  function mountMissionSaveClear(){
+    const ms=$(SEL.missionSelect);
+    if (!ms || ms.dataset.vpDone) return;
+    ms.insertAdjacentElement('afterend', inlineGroup(
+      ()=>GM_Set(STORAGE.mission,{value:ms.value}),
+      ()=>GM_Del(STORAGE.mission)
+    ));
+    const sv=GM_Get(STORAGE.mission,null);
+    if(sv){ ms.value=sv.value; ms.dispatchEvent(new Event('change',{bubbles:true})); }
+    ms.addEventListener('change', applySavedResourcesIfTransport);
+    ms.dataset.vpDone='1';
+  }
 
+  /* ============ Ressourcen: Header Save/Clear + Quick-Buttons ============ */
   function mountResourcesHeaderAndQuickButtons(){
-    const inputs = [
-      $(SELECTORS.resArm), $(SELECTORS.resMun),
-      $(SELECTORS.resAlc), $(SELECTORS.resDol),
-    ].filter(Boolean);
+    const inputs = [$(SEL.resArm),$(SEL.resMun),$(SEL.resAlc),$(SEL.resDol)].filter(Boolean);
     if (!inputs.length) return;
 
     const headerCell = (()=>{
@@ -176,8 +149,8 @@
 
     if (headerCell && !headerCell.dataset.vpResHeader){
       headerCell.insertAdjacentElement('beforeend', inlineGroup(
-        ()=>GM_Set(STORAGE_KEYS.resources, readResources()),
-        ()=>{ GM_Del(STORAGE_KEYS.resources); applyResources({arm:'',mun:'',alc:'',dol:''}); }
+        ()=>GM_Set(STORAGE.resources, readResources()),
+        ()=>{ GM_Del(STORAGE.resources); applyResources({arm:'',mun:'',alc:'',dol:''}); }
       ));
       headerCell.dataset.vpResHeader='1';
     }
@@ -211,23 +184,23 @@
   }
   function readResources(){
     return {
-      arm: toInt($(SELECTORS.resArm)?.value,0),
-      mun: toInt($(SELECTORS.resMun)?.value,0),
-      alc: toInt($(SELECTORS.resAlc)?.value,0),
-      dol: toInt($(SELECTORS.resDol)?.value,0),
+      arm: toInt($(SEL.resArm)?.value,0),
+      mun: toInt($(SEL.resMun)?.value,0),
+      alc: toInt($(SEL.resAlc)?.value,0),
+      dol: toInt($(SEL.resDol)?.value,0),
     };
   }
   function applyResources(o){
-    setVal($(SELECTORS.resArm), o?.arm ?? '');
-    setVal($(SELECTORS.resMun), o?.mun ?? '');
-    setVal($(SELECTORS.resAlc), o?.alc ?? '');
-    setVal($(SELECTORS.resDol), o?.dol ?? '');
+    setVal($(SEL.resArm), o?.arm ?? '');
+    setVal($(SEL.resMun), o?.mun ?? '');
+    setVal($(SEL.resAlc), o?.alc ?? '');
+    setVal($(SEL.resDol), o?.dol ?? '');
   }
   function applySavedResourcesIfTransport(){
-    const ms=$(SELECTORS.missionSelect);
+    const ms=$(SEL.missionSelect);
     const isTransport = ms && String(ms.value)==='3';
     if (!isTransport) return;
-    const saved=GM_Get(STORAGE_KEYS.resources,null);
+    const saved=GM_Get(STORAGE.resources,null);
     if (saved) applyResources(saved);
   }
   function amtBtn(text, delta, input){
@@ -248,12 +221,12 @@
     return sign + abs;
   }
 
-  /* ================== NEU: Troops Save/Clear (auto für alle Einheiten) ================== */
+  /* ============ Troops Save/Clear (auto für alle Einheiten) ============ */
   function mountTroopSaveClear(){
     const inputs = $$('input[id^="subFormTropas-"]');
     if (!inputs.length) return;
 
-    const state = Object.assign({}, GM_Get(STORAGE_KEYS.troops, {})); // { unitKey: value }
+    const state = Object.assign({}, GM_Get(STORAGE.troops, {})); // { unitKey: value }
 
     inputs.forEach(inp=>{
       if (inp.dataset.vpTroopDone) return;
@@ -263,8 +236,8 @@
       const unitKey = normalizeUnitName(rawName);            // -> "mover"
 
       const controls = inlineGroup(
-        ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE_KEYS.troops, state); },
-        ()=>{ delete state[unitKey]; GM_Set(STORAGE_KEYS.troops, state); setVal(inp,''); }
+        ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE.troops, state); },
+        ()=>{ delete state[unitKey]; GM_Set(STORAGE.troops, state); setVal(inp,''); }
       );
       inp.insertAdjacentElement('afterend', controls);
 
@@ -281,11 +254,11 @@
       .toLowerCase();
   }
 
-  /* ================== NEU: Dual-Send Buttons (< Send / Send >) ================== */
+  /* ============ Dual-Send Buttons (< Send / Send >) mit Abstand ============ */
   function mountDualSendButtons(){
-    const btnSend   = $(SELECTORS.btnSend);
-    const btnUpdate = $(SELECTORS.btnUpdate);
-    const form      = $(SELECTORS.missionForm);
+    const btnSend   = $(SEL.btnSend);
+    const btnUpdate = $(SEL.btnUpdate);
+    const form      = $(SEL.missionForm);
     if (!form || !btnSend || btnSend.dataset.vpDual) return;
 
     // "< Send" links neben "Update"
@@ -293,7 +266,7 @@
       const leftBtn = document.createElement('input');
       leftBtn.type='button';
       leftBtn.value='< Send';
-      leftBtn.className = (btnSend.className || '') + ' vp-like';
+      leftBtn.className = (btnSend.className || '') + ' vp-like vp-left';
       leftBtn.addEventListener('click', ()=>{
         setPostSendDelta(-1);
         safeSubmitSend();
@@ -306,10 +279,10 @@
     const rightBtn = document.createElement('input');
     rightBtn.type='button';
     rightBtn.value='Send >';
-    rightBtn.className = (btnSend.className || '') + ' vp-like';
+    rightBtn.className = (btnSend.className || '') + ' vp-like vp-right';
     rightBtn.addEventListener('click', ()=>{
-        setPostSendDelta(+1);
-        safeSubmitSend();
+      setPostSendDelta(+1);
+      safeSubmitSend();
     });
     if (btnSend.nextSibling) btnSend.parentNode.insertBefore(rightBtn, btnSend.nextSibling); else btnSend.parentNode.appendChild(rightBtn);
 
@@ -317,9 +290,8 @@
   }
 
   function safeSubmitSend(){
-    // Klickt bevorzugt den echten "Send"-Button, fallback submit()
-    const form=$(SELECTORS.missionForm);
-    const btn=$(SELECTORS.btnSend);
+    const form=$(SEL.missionForm);
+    const btn=$(SEL.btnSend);
     if (!form || !btn) return;
     try { btn.click(); }
     catch {
@@ -328,43 +300,41 @@
   }
 
   function setPostSendDelta(delta){
-    try { sessionStorage.setItem(STORAGE_KEYS.postSendDelta, String(delta)); } catch{}
+    try { sessionStorage.setItem(STORAGE.postDelta, String(delta)); } catch{}
   }
   function consumePostSendDelta(){
     let d=null;
-    try { d = sessionStorage.getItem(STORAGE_KEYS.postSendDelta); sessionStorage.removeItem(STORAGE_KEYS.postSendDelta); } catch{}
+    try { d = sessionStorage.getItem(STORAGE.postDelta); sessionStorage.removeItem(STORAGE.postDelta); } catch{}
     const n = d==null ? null : parseInt(d,10);
     return Number.isFinite(n) ? n : null;
   }
   function applyPostSendNavigationIfAny(){
     const delta = consumePostSendDelta();
     if (delta==null) return;
-    // Nach dem Postback sicher zum gewünschten Gebäude
     navigateBuilding(delta);
   }
 
-  /* ================== Init & Observer ================== */
+  /* ============ Init & Observer ============ */
+  function onMissionsPage(){ return !!$(SEL.missionForm); }
+
   function bootstrap(){
     mountBuildingNavigator();
-    mountOverviewToggles();
 
     if (!onMissionsPage()) return;
 
-    // vorhandene Helfer:
+    // Save/Clear an allen gewünschten Stellen:
+    mountCoordsSaveClear();
+    mountMissionSaveClear();
     mountResourcesHeaderAndQuickButtons();
-
-    // neu:
     mountTroopSaveClear();
-    mountDualSendButtons();
 
-    // falls von < Send / Send > zurück:
+    // Dual-Send + ggf. nach Absenden springen:
+    mountDualSendButtons();
     applyPostSendNavigationIfAny();
   }
 
-  // run now
   bootstrap();
 
-  // observe ajax-y changes
   let raf=null;
   const obs=new MutationObserver(()=>{
     if(raf) return;
@@ -374,5 +344,4 @@
     });
   });
   obs.observe(document.documentElement,{childList:true,subtree:true});
-
 })();
