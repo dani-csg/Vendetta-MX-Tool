@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.5.0
+// @version      1.5.1
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
