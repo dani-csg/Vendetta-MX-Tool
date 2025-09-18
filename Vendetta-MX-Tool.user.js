@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.6.1
+// @version      1.6.2
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
@@ -55,57 +55,34 @@
     btnSend:    '#enviar',
   };
 
-  /* ============ CSS (inkl. Abstände) ============ */
+  /* ============ CSS – strikt nur auf MISSIONSSEITE (.vp-missions) ============ */
   (function ensureCss(){
     if (document.querySelector('#vp-style')) return;
     const st=document.createElement('style'); st.id='vp-style';
     st.textContent=`
-      #frmBuilding button, .vp-inline-group button, .vp-amount button, input.vp-like {
+      .vp-missions #frmBuilding button,
+      .vp-missions .vp-inline-group button,
+      .vp-missions .vp-amount button,
+      .vp-missions input.vp-like {
         border-radius: 4px; padding: 2px 8px; font-size: 12px; line-height: 1.2;
         height: auto; vertical-align: middle; background:#f7f7f7; border:1px solid #999; cursor:pointer;
       }
-      #frmBuilding select { border-radius: 4px; padding: 2px 4px; font-size: 12px; line-height: 1.2; height: auto; vertical-align: middle; }
+      .vp-missions #frmBuilding select { border-radius: 4px; padding: 2px 4px; font-size: 12px; line-height: 1.2; height: auto; vertical-align: middle; }
 
-      .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
-
-      .vp-res-wrap{ display:flex; align-items:center; gap:.35rem; }
-      .vp-amount{ display:inline-flex; gap:.25rem; }
+      .vp-missions .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
+      .vp-missions .vp-res-wrap{ display:flex; align-items:center; gap:.35rem; }
+      .vp-missions .vp-amount{ display:inline-flex; gap:.25rem; }
 
       /* Abstand für zusätzliche Send-Buttons */
-      input.vp-like.vp-left  { margin-right: .5rem; }
-      input.vp-like.vp-right { margin-left:  .5rem; }
-
-      /* (bestehende Styles aus deiner Vorgängerversion gekürzt) */
+      .vp-missions input.vp-like.vp-left  { margin-right: .5rem; }
+      .vp-missions input.vp-like.vp-right { margin-left:  .5rem; }
     `;
     document.head.appendChild(st);
   })();
 
-  /* ============ Building navigator (− [select] +) ============ */
-  function mountBuildingNavigator(){
-    const sel = $(SEL.buildingSelect);
-    if (!sel || sel.dataset.vpHasNav) return;
-    const minus = navBtn('−','Previous building',()=>navigateBuilding(-1));
-    const plus  = navBtn('+','Next building',   ()=>navigateBuilding(+1));
-    sel.insertAdjacentElement('beforebegin', minus);
-    sel.insertAdjacentElement('afterend', plus);
-    sel.dataset.vpHasNav='1';
-  }
-  function navBtn(txt,title,fn){
-    const b=document.createElement('button');
-    b.type='button'; b.textContent=txt; b.title=title||''; b.addEventListener('click',fn);
-    return b;
-  }
-  function navigateBuilding(delta){
-    const sel=$(SEL.buildingSelect);
-    const form=$(SEL.buildingForm);
-    if(!sel || !form || !sel.options || sel.options.length<2) return;
-    const len=sel.options.length, cur=sel.selectedIndex>=0?sel.selectedIndex:0;
-    sel.selectedIndex=(cur+delta+len)%len;
-    try{ sel.dispatchEvent(new Event('change',{bubbles:true})); }catch{}
-    try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
-  }
+  /* ============ Missions-Helfer ============ */
+  function onMissionsPage(){ return !!$(SEL.missionForm); }
 
-  /* ============ Missions: Save/Clear (Koordinaten + Mission) ============ */
   function inlineGroup(saveCb, clearCb){
     const span=document.createElement('span'); span.className='vp-inline-group';
     const s=document.createElement('button'); s.type='button'; s.textContent='Save';  s.addEventListener('click',saveCb);
@@ -113,6 +90,8 @@
     span.append(s,c);
     return span;
   }
+
+  // Koordinaten Save/Clear
   function mountCoordsSaveClear(){
     const cx=$(SEL.coordX), cy=$(SEL.coordY), cz=$(SEL.coordZ);
     if (!cz || cz.dataset.vpDone) return;
@@ -124,6 +103,8 @@
     if(saved){ setVal(cx,saved.x); setVal(cy,saved.y); setVal(cz,saved.z); }
     cz.dataset.vpDone='1';
   }
+
+  // Missionsart Save/Clear
   function mountMissionSaveClear(){
     const ms=$(SEL.missionSelect);
     if (!ms || ms.dataset.vpDone) return;
@@ -137,7 +118,7 @@
     ms.dataset.vpDone='1';
   }
 
-  /* ============ Ressourcen: Header Save/Clear + Quick-Buttons ============ */
+  // Ressourcen: Header Save/Clear + Quickbuttons
   function mountResourcesHeaderAndQuickButtons(){
     const inputs = [$(SEL.resArm),$(SEL.resMun),$(SEL.resAlc),$(SEL.resDol)].filter(Boolean);
     if (!inputs.length) return;
@@ -167,13 +148,11 @@
         inp.parentNode.insertBefore(wrap, inp);
         wrap.append(inp);
       }
-      const left = document.createElement('span');
-      left.className='vp-amount';
+      const left = document.createElement('span'); left.className='vp-amount';
       leftDeltas.forEach(d=>left.appendChild(amtBtn(label(d), d, inp)));
       wrap.insertBefore(left, inp);
 
-      const right = document.createElement('span');
-      right.className='vp-amount';
+      const right = document.createElement('span'); right.className='vp-amount';
       rightDeltas.forEach(d=>right.appendChild(amtBtn(label(d), d, inp)));
       if (inp.nextSibling) wrap.insertBefore(right, inp.nextSibling); else wrap.appendChild(right);
 
@@ -221,19 +200,18 @@
     return sign + abs;
   }
 
-  /* ============ Troops Save/Clear (auto für alle Einheiten) ============ */
+  // Truppen Save/Clear (auto für alle Einheiten)
   function mountTroopSaveClear(){
     const inputs = $$('input[id^="subFormTropas-"]');
     if (!inputs.length) return;
 
-    const state = Object.assign({}, GM_Get(STORAGE.troops, {})); // { unitKey: value }
-
+    const state = Object.assign({}, GM_Get(STORAGE.troops, {}));
     inputs.forEach(inp=>{
       if (inp.dataset.vpTroopDone) return;
       const row = inp.closest('tr');
       const labelEl = row ? row.querySelector('label') : null;
-      const rawName = (labelEl?.textContent || '').trim();   // z.B. "Mover (1)"
-      const unitKey = normalizeUnitName(rawName);            // -> "mover"
+      const rawName = (labelEl?.textContent || '').trim();
+      const unitKey = normalizeUnitName(rawName);
 
       const controls = inlineGroup(
         ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE.troops, state); },
@@ -242,7 +220,6 @@
       inp.insertAdjacentElement('afterend', controls);
 
       if (state[unitKey] != null) setVal(inp, state[unitKey]);
-
       inp.dataset.vpTroopDone='1';
     });
   }
@@ -254,14 +231,13 @@
       .toLowerCase();
   }
 
-  /* ============ Dual-Send Buttons (< Send / Send >) mit Abstand ============ */
+  // Zusätzliche Send-Buttons (< Send / Send >) mit Abstand
   function mountDualSendButtons(){
     const btnSend   = $(SEL.btnSend);
     const btnUpdate = $(SEL.btnUpdate);
     const form      = $(SEL.missionForm);
     if (!form || !btnSend || btnSend.dataset.vpDual) return;
 
-    // "< Send" links neben "Update"
     if (btnUpdate && !btnUpdate.dataset.vpDualLeft){
       const leftBtn = document.createElement('input');
       leftBtn.type='button';
@@ -275,7 +251,6 @@
       btnUpdate.dataset.vpDualLeft='1';
     }
 
-    // "Send >" rechts neben "Send"
     const rightBtn = document.createElement('input');
     rightBtn.type='button';
     rightBtn.value='Send >';
@@ -285,7 +260,6 @@
       safeSubmitSend();
     });
     if (btnSend.nextSibling) btnSend.parentNode.insertBefore(rightBtn, btnSend.nextSibling); else btnSend.parentNode.appendChild(rightBtn);
-
     btnSend.dataset.vpDual='1';
   }
 
@@ -314,34 +288,40 @@
     navigateBuilding(delta);
   }
 
+  // Gebäudewechsel (wird nach Absenden genutzt)
+  function navigateBuilding(delta){
+    const sel=$(SEL.buildingSelect); const form=$(SEL.buildingForm);
+    if(!sel||!form||!sel.options||sel.options.length<2) return;
+    const len=sel.options.length, cur=sel.selectedIndex>=0?sel.selectedIndex:0;
+    sel.selectedIndex=(cur+delta+len)%len;
+    try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
+  }
+
   /* ============ Init & Observer ============ */
-  function onMissionsPage(){ return !!$(SEL.missionForm); }
-
   function bootstrap(){
-    mountBuildingNavigator();
+    // Styles nur auf Missionsseite aktivieren
+    if (onMissionsPage()) {
+      document.body.classList.add('vp-missions');
 
-    if (!onMissionsPage()) return;
+      mountCoordsSaveClear();
+      mountMissionSaveClear();
+      mountResourcesHeaderAndQuickButtons();
+      mountTroopSaveClear();
+      mountDualSendButtons();
 
-    // Save/Clear an allen gewünschten Stellen:
-    mountCoordsSaveClear();
-    mountMissionSaveClear();
-    mountResourcesHeaderAndQuickButtons();
-    mountTroopSaveClear();
-
-    // Dual-Send + ggf. nach Absenden springen:
-    mountDualSendButtons();
-    applyPostSendNavigationIfAny();
+      // Falls gerade von < Send / Send > zurück:
+      applyPostSendNavigationIfAny();
+    } else {
+      document.body.classList.remove('vp-missions');
+    }
   }
 
   bootstrap();
-
   let raf=null;
   const obs=new MutationObserver(()=>{
     if(raf) return;
-    raf=requestAnimationFrame(()=>{
-      raf=null;
-      bootstrap();
-    });
+    raf=requestAnimationFrame(()=>{ raf=null; bootstrap(); });
   });
   obs.observe(document.documentElement,{childList:true,subtree:true});
+
 })();
