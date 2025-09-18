@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.6.6
+// @version      1.6.7
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
@@ -33,6 +33,7 @@
     mission:   'vp_mission_default_v1',
     resources: 'vp_resources_default_v1',
     postDelta: 'vp_post_send_building_delta_v1',
+    boxes:     'vp_collapsed_boxes_v2', // title -> collapsed
   };
 
   const SEL = {
@@ -53,6 +54,7 @@
   };
 
   const onMissionsPage = () => !!$(SEL.missionForm);
+  const onOverviewPage = () => /\/public\/mob\/visiongeneral(?:\/index)?$/i.test(location.pathname.replace(/\/+$/,''));
 
   /* ---------- CSS: reset alte Styles + scoped neue Styles ---------- */
   (function ensureCss(){
@@ -62,7 +64,7 @@
     // 2) frisch & scoped einfügen
     const st=document.createElement('style'); st.id='vp-style';
     st.textContent = `
-      /* NUR Missionsseite */
+      /* === MISSIONS === */
       body.vp-missions .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
       body.vp-missions .vp-inline-group button{
         border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
@@ -81,6 +83,18 @@
       body.vp-missions input.vp-left  { margin-right:.5rem; }
       body.vp-missions input.vp-right { margin-left:.5rem; }
 
+      /* === OVERVIEW: nur unsere Toggle-Buttons & nichts anderes === */
+      body.vp-overview .content_box{ position:relative; }
+      body.vp-overview .content_box > h2{ position:relative; padding-right:2.2rem; }
+      body.vp-overview .vp-box-toggle{
+        position:absolute; right:.4rem; top:50%; transform:translateY(-50%);
+        background:#1b1b1b; color:#fff; border:1px solid #777;
+        border-radius:.25rem; font:12px/1 system-ui,sans-serif;
+        width:1.6rem; height:1.3rem; text-align:center; cursor:pointer; opacity:.95;
+      }
+      body.vp-overview .vp-box-toggle:hover{ filter:brightness(1.2); }
+      body.vp-overview .content_box.vp-collapsed .content_box_text{ display:none !important; }
+
       /* Globale, neutrale Nav-Buttons neben dem Gebäude-Select */
       button.vp-nav{
         border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
@@ -90,7 +104,7 @@
     document.head.appendChild(st);
   })();
 
-  /* ---------- Overview: Building quick-nav ---------- */
+  /* ---------- Overview: Building quick-nav + Collapsible boxes ---------- */
   function mountBuildingNavigator(){
     const sel=$(SEL.buildingSelect);
     if (!sel || sel.dataset.vpHasNav) return;
@@ -111,6 +125,42 @@
     try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
   }
 
+  function mountOverviewToggles(){
+    if (!onOverviewPage()) return;
+    document.body.classList.add('vp-overview');
+
+    const state = Object.assign({}, GM_Get(STORAGE.boxes, {})); // title -> collapsed:boolean
+
+    $$('#content .content_box').forEach(box=>{
+      if (box.dataset.vpTgl) return;
+      const h2=box.querySelector('h2');
+      const body=box.querySelector('.content_box_text');
+      if(!h2||!body) return;
+
+      const title=(h2.textContent||'').trim();
+      const btn=document.createElement('button');
+      btn.type='button'; btn.className='vp-box-toggle';
+
+      const collapsed=!!state[title];
+      if (collapsed) box.classList.add('vp-collapsed');
+      btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      btn.textContent = collapsed ? '+' : '−';
+
+      btn.addEventListener('click', ()=>{
+        const open = btn.getAttribute('aria-expanded')==='true';
+        const newOpen = !open;
+        btn.setAttribute('aria-expanded', newOpen ? 'true' : 'false');
+        btn.textContent = newOpen ? '−' : '+';
+        box.classList.toggle('vp-collapsed', !newOpen);
+        state[title] = !newOpen;
+        GM_Set(STORAGE.boxes, state);
+      });
+
+      h2.appendChild(btn);
+      box.dataset.vpTgl='1';
+    });
+  }
+
   /* ---------- Missions: Save/Clear & Ressourcen-Quicks ---------- */
   function inlineGroup(saveCb, clearCb){
     const wrap=document.createElement('span'); wrap.className='vp-inline-group';
@@ -122,13 +172,13 @@
   function mountTroopSaveClear(){
     const inputs = $$('input[id^="subFormTropas-"]');
     if (!inputs.length) return;
-    const state = Object.assign({}, GM_Get(STORAGE.troops, {}));
+    const state = Object.assign({}, GM_Get(STORAGE.troops, {})); // { unitKey: value }
     inputs.forEach(inp=>{
       if (inp.dataset.vpTroopDone) return;
       const row = inp.closest('tr');
       const labelEl = row ? row.querySelector('label') : null;
-      const rawName = (labelEl?.textContent || '').trim();
-      const unitKey = normalizeUnitName(rawName);
+      const rawName = (labelEl?.textContent || '').trim();   // z.B. "Mover (1)"
+      const unitKey = normalizeUnitName(rawName);            // -> "mover"
       const controls = inlineGroup(
         ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE.troops, state); },
         ()=>{ delete state[unitKey]; GM_Set(STORAGE.troops, state); setVal(inp,''); }
@@ -281,8 +331,9 @@
 
   /* ---------- Init & Observer ---------- */
   function bootstrap(){
-    // Overview: nur Navigator
+    // Overview: Navigator + Collapsible
     mountBuildingNavigator();
+    mountOverviewToggles();
 
     // Missionsseite ein/aus
     if (onMissionsPage()){
