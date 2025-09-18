@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Vendetta MX Tool
 // @namespace    mx.tools
-// @version      1.6.5
+// @version      1.6.6
 // @description  QoL: building navigation (− [select] +), mission templates (Save/Clear), resource quick-amounts, collapsible overview boxes with saved state, resource bar spacing fix, compact buttons.
 // @author       mx
 // @match        *://vendettagame.es/public/*
@@ -17,7 +17,7 @@
 (function () {
   'use strict';
 
-  /* ---------- helpers ---------- */
+  /* ---------- utils ---------- */
   const $  = (s, r=document)=>r.querySelector(s);
   const $$ = (s, r=document)=>Array.from(r.querySelectorAll(s));
   const toInt=(v,d=0)=>{const n=parseInt(String(v??'').replace(/[^\d-]+/g,''),10);return Number.isFinite(n)?n:d;};
@@ -36,11 +36,9 @@
   };
 
   const SEL = {
-    // global / overview
     buildingForm:  '#frmBuilding',
     buildingSelect:'#building',
 
-    // missions
     missionForm:   'form[action="/public/mob/misiones"]',
     missionSelect: '#subFormCoordenadas-mision',
     coordX:        '#subFormCoordenadas-coordx',
@@ -56,12 +54,15 @@
 
   const onMissionsPage = () => !!$(SEL.missionForm);
 
-  /* ---------- CSS (strikt nur für Missionsseite + unsere kleinen Zusatzbuttons) ---------- */
-  (function css(){
-    if ($('#vp-style')) return;
+  /* ---------- CSS: reset alte Styles + scoped neue Styles ---------- */
+  (function ensureCss(){
+    // 1) alte/leckende Styles entfernen (SPA hält <head> über mehrere Views)
+    $$('#vp-style').forEach(n=>n.remove());
+
+    // 2) frisch & scoped einfügen
     const st=document.createElement('style'); st.id='vp-style';
     st.textContent = `
-      /* nur unsere Controls auf der Missionsseite */
+      /* NUR Missionsseite */
       body.vp-missions .vp-inline-group{ display:inline-flex; gap:.35rem; margin-left:.5rem; vertical-align:middle; }
       body.vp-missions .vp-inline-group button{
         border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
@@ -73,7 +74,6 @@
         border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
         background:#f7f7f7; border:1px solid #aaa; cursor:pointer;
       }
-      /* zusätzliche Send-Buttons mit Abstand */
       body.vp-missions input.vp-like{
         border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
         background:#f7f7f7; border:1px solid #999; cursor:pointer;
@@ -81,14 +81,16 @@
       body.vp-missions input.vp-left  { margin-right:.5rem; }
       body.vp-missions input.vp-right { margin-left:.5rem; }
 
-      /* unsere kleinen Navigator-Buttons neben dem Gebäude-Select – global, aber neutral */
-      button.vp-nav { border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
-        background:#f7f7f7; border:1px solid #999; cursor:pointer; margin:0 .25rem; }
+      /* Globale, neutrale Nav-Buttons neben dem Gebäude-Select */
+      button.vp-nav{
+        border-radius:4px; padding:2px 8px; font-size:12px; line-height:1.2; height:auto;
+        background:#f7f7f7; border:1px solid #999; cursor:pointer; margin:0 .25rem;
+      }
     `;
     document.head.appendChild(st);
   })();
 
-  /* ---------- Overview/Hauptseite: Building quick-nav ---------- */
+  /* ---------- Overview: Building quick-nav ---------- */
   function mountBuildingNavigator(){
     const sel=$(SEL.buildingSelect);
     if (!sel || sel.dataset.vpHasNav) return;
@@ -109,7 +111,7 @@
     try{ form.submit(); }catch{ try{ form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})); }catch{} }
   }
 
-  /* ---------- Missionsseite: Save/Clear & Ressourcen-Quicks ---------- */
+  /* ---------- Missions: Save/Clear & Ressourcen-Quicks ---------- */
   function inlineGroup(saveCb, clearCb){
     const wrap=document.createElement('span'); wrap.className='vp-inline-group';
     const s=document.createElement('button'); s.type='button'; s.textContent='Save';  s.addEventListener('click',saveCb);
@@ -117,17 +119,16 @@
     wrap.append(s,c); return wrap;
   }
 
-  // Troops (auto für alle Einheiten)
   function mountTroopSaveClear(){
     const inputs = $$('input[id^="subFormTropas-"]');
     if (!inputs.length) return;
-    const state = Object.assign({}, GM_Get(STORAGE.troops, {})); // { unitKey: value }
+    const state = Object.assign({}, GM_Get(STORAGE.troops, {}));
     inputs.forEach(inp=>{
       if (inp.dataset.vpTroopDone) return;
       const row = inp.closest('tr');
       const labelEl = row ? row.querySelector('label') : null;
-      const rawName = (labelEl?.textContent || '').trim();   // z.B. "Mover (1)"
-      const unitKey = normalizeUnitName(rawName);            // -> "mover"
+      const rawName = (labelEl?.textContent || '').trim();
+      const unitKey = normalizeUnitName(rawName);
       const controls = inlineGroup(
         ()=>{ state[unitKey]=toInt(inp.value,0); GM_Set(STORAGE.troops, state); },
         ()=>{ delete state[unitKey]; GM_Set(STORAGE.troops, state); setVal(inp,''); }
@@ -139,13 +140,12 @@
   }
   function normalizeUnitName(s){
     return String(s||'')
-      .replace(/\(.*?\)/g,'')           // "(1)" entfernen
-      .replace(/[^\p{L}\p{N}]+/gu,'_')  // nicht alnum -> "_"
-      .replace(/^_+|_+$/g,'')           // Trim "_"
+      .replace(/\(.*?\)/g,'')
+      .replace(/[^\p{L}\p{N}]+/gu,'_')
+      .replace(/^_+|_+$/g,'')
       .toLowerCase();
   }
 
-  // Koordinaten Save/Clear
   function mountCoordsSaveClear(){
     const cx=$(SEL.coordX), cy=$(SEL.coordY), cz=$(SEL.coordZ);
     if (!cz || cz.dataset.vpDone) return;
@@ -158,7 +158,6 @@
     cz.dataset.vpDone='1';
   }
 
-  // Missionsart Save/Clear
   function mountMissionSaveClear(){
     const ms=$(SEL.missionSelect);
     if (!ms || ms.dataset.vpDone) return;
@@ -172,12 +171,10 @@
     ms.dataset.vpDone='1';
   }
 
-  // Ressourcen: Header Save/Clear + Quick Buttons je Feld
   function mountResourcesHeaderAndQuickButtons(){
     const inputs = [$(SEL.resArm),$(SEL.resMun),$(SEL.resAlc),$(SEL.resDol)].filter(Boolean);
     if (!inputs.length) return;
 
-    // Headerzelle finden ("Resources")
     const headerCell = (()=>{
       const cells = $$('.c, td.c, th.c, h2');
       return cells.find(el => /resources/i.test((el.textContent||'').trim()));
@@ -191,8 +188,8 @@
       headerCell.dataset.vpResHeader='1';
     }
 
-    const leftD = [-50000, -5000, -500];
-    const rightD= [  1000,  10000, 100000];
+    const leftD  = [-50000, -5000, -500];
+    const rightD = [  1000,  10000, 100000];
 
     inputs.forEach(inp=>{
       if (inp.dataset.vpQuick) return;
@@ -260,19 +257,18 @@
     const btnSend=$(SEL.btnSend), btnUpdate=$(SEL.btnUpdate);
     if(!btnSend || btnSend.dataset.vpExt) return;
 
-    const btnPrev=document.createElement('input');
-    btnPrev.type='button'; btnPrev.value='< Send'; btnPrev.className='vp-like vp-left';
-    btnPrev.addEventListener('click',()=>{ setPostSendDelta(-1); safeSubmitSend(); });
+    const prev=document.createElement('input');
+    prev.type='button'; prev.value='< Send'; prev.className='vp-like vp-left';
+    prev.addEventListener('click',()=>{ setPostSendDelta(-1); safeSubmitSend(); });
 
-    const btnNext=document.createElement('input');
-    btnNext.type='button'; btnNext.value='Send >'; btnNext.className='vp-like vp-right';
-    btnNext.addEventListener('click',()=>{ setPostSendDelta(+1); safeSubmitSend(); });
+    const next=document.createElement('input');
+    next.type='button'; next.value='Send >'; next.className='vp-like vp-right';
+    next.addEventListener('click',()=>{ setPostSendDelta(+1); safeSubmitSend(); });
 
-    if (btnUpdate) btnUpdate.insertAdjacentElement('beforebegin',btnPrev);
-    btnSend.insertAdjacentElement('afterend',btnNext);
+    if (btnUpdate) btnUpdate.insertAdjacentElement('beforebegin',prev);
+    btnSend.insertAdjacentElement('afterend',next);
     btnSend.dataset.vpExt='1';
   }
-
   function safeSubmitSend(){
     const form=$(SEL.btnSend)?.closest('form');
     if(!form) return;
@@ -285,11 +281,11 @@
 
   /* ---------- Init & Observer ---------- */
   function bootstrap(){
-    // Overview: nur Navigator (beeinflusst die Box-Toggles NICHT)
+    // Overview: nur Navigator
     mountBuildingNavigator();
 
-    // Missionsseite aktivieren/deaktivieren
-    if (onMissionsPage()) {
+    // Missionsseite ein/aus
+    if (onMissionsPage()){
       document.body.classList.add('vp-missions');
       mountCoordsSaveClear();
       mountMissionSaveClear();
@@ -300,7 +296,7 @@
       document.body.classList.remove('vp-missions');
     }
 
-    // falls wir von <Send/Send> kommen: egal welche Seite, jetzt springen
+    // Nach <Send/Send> ggf. springen (egal auf welcher Seite)
     applyPostSendNavigationIfAny();
   }
 
